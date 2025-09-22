@@ -112,10 +112,14 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
                             const char *cmd_name = json_string_value(command_name);
                             for (int i = 0; i < bot->command_count; i++) {
                                 if (strcmp(bot->commands[i].name, cmd_name) == 0) {
+                                    // Call the handler function NOW when command is used
+                                    char *response = bot->commands[i].handler();
                                     discord_send_interaction_response(bot, 
                                         json_string_value(interaction_id),
                                         json_string_value(interaction_token),
-                                        bot->commands[i].response_message);
+                                        response);
+                                    // Free the response if handler allocated it
+                                    free(response);
                                     break;
                                 }
                             }
@@ -380,7 +384,7 @@ void discord_cleanup(discord_bot_t *bot) {
         for (int i = 0; i < bot->command_count; i++) {
             free(bot->commands[i].name);
             free(bot->commands[i].description);
-            free(bot->commands[i].response_message);
+            // Note: handler is a function pointer, no need to free
         }
         
         if (bot->curl) {
@@ -426,15 +430,15 @@ void discord_send_message(discord_bot_t *bot, const char *channel_id, const char
     curl_easy_reset(bot->curl);
 }
 
-// Add a slash command
-int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, const char *response) {
-    if (!bot || !name || !description || !response || bot->command_count >= MAX_COMMANDS) {
+// Add a slash command with function pointer
+int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler) {
+    if (!bot || !name || !description || !handler || bot->command_count >= MAX_COMMANDS) {
         return 0;
     }
     
     bot->commands[bot->command_count].name = strdup(name);
     bot->commands[bot->command_count].description = strdup(description);
-    bot->commands[bot->command_count].response_message = strdup(response);
+    bot->commands[bot->command_count].handler = handler; // Store function pointer
     bot->command_count++;
     
     return 1;

@@ -1,1 +1,4 @@
-bot_example.c
+src/
+.gitignore
+discord_bot
+*.o

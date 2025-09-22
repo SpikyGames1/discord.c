@@ -13,10 +13,13 @@
 #define MAX_COMMANDS 10
 #define MAX_RESPONSE_SIZE 4096
 
+// Function pointer type for command handlers
+typedef char* (*command_handler_t)(void);
+
 typedef struct {
     char *name;
     char *description;
-    char *response_message;
+    command_handler_t handler; // Function pointer instead of static message
 } slash_command_t;
 
 typedef struct {
@@ -50,8 +53,8 @@ void discord_cleanup(discord_bot_t *bot);
 // Send a message to a channel
 void discord_send_message(discord_bot_t *bot, const char *channel_id, const char *message);
 
-// Add a slash command
-int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, const char *response);
+// Add a slash command with function pointer
+int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler);
 
 // Register all slash commands with Discord
 int discord_register_commands(discord_bot_t *bot);

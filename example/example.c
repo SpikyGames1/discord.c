@@ -1,5 +1,5 @@
 // bot_example.c
-#include "discord.h"
+#include "../discord.h"
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
@@ -15,6 +15,22 @@ void signal_handler(int sig) {
     }
 }
 
+// Command handler functions - these will be called when the command is used
+char* hello_command() {
+    printf("Command /hello used\n");
+    return strdup("Hello there!"); // Return allocated string
+}
+
+char* ping_command() {
+    printf("Command /ping used\n");
+    return strdup("Pong! 🏓");
+}
+
+char* info_command() {
+    printf("Command /info used\n");
+    return strdup("This is a C Discord bot!");
+}
+
 int main() {
     printf("Starting Discord bot with slash commands...\n");
     
@@ -28,11 +44,11 @@ int main() {
     global_bot = bot;
     signal(SIGINT, signal_handler);
     
-    // Add slash commands
+    // Add slash commands with function pointers (no parentheses!)
     printf("Adding slash commands...\n");
-    discord_add_slash_command(bot, "hello", "Say hello!", "Hello there! 👋");
-    discord_add_slash_command(bot, "ping", "Check if bot is alive", "Pong! 🏓");
-    discord_add_slash_command(bot, "info", "Get bot information", "This is a C Discord bot!");
+    discord_add_slash_command(bot, "hello", "Say hello!", hello_command);
+    discord_add_slash_command(bot, "ping", "Check if bot is alive", ping_command);
+    discord_add_slash_command(bot, "info", "Get bot information", info_command);
     
     // Register commands with Discord
     printf("Registering commands with Discord...\n");
