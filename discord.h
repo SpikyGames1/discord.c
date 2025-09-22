@@ -9,6 +9,8 @@
 #include <jansson.h>
 #include <libwebsockets.h>
 #include <pthread.h>
+#include <sys/time.h>
+#include <time.h>
 
 #define MAX_COMMANDS 10
 #define MAX_RESPONSE_SIZE 4096
@@ -42,6 +44,14 @@ typedef struct {
     struct lws *ws_connection;
     pthread_t gateway_thread;
     int should_stop;
+    
+    // Latency tracking
+    struct timeval last_heartbeat_sent;
+    struct timeval last_heartbeat_ack;
+    int heartbeat_acked;
+    int heartbeat_interval;
+    long gateway_latency_ms;
+    pthread_mutex_t latency_mutex;
 } discord_bot_t;
 
 // Initialize the bot with a token
@@ -73,5 +83,10 @@ void discord_send_interaction_response(discord_bot_t *bot, const char *interacti
 
 // Get application ID from token (helper function)
 int discord_get_application_id(discord_bot_t *bot);
+
+// Get current gateway latency in milliseconds
+long discord_get_latency(discord_bot_t *bot);
+
+void discord_set_global_bot(discord_bot_t *bot);
 
 #endif

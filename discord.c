@@ -1,5 +1,57 @@
-// discord.c
+// discord.c - Implementation
 #include "discord.h"
+
+// Global bot instance for built-in commands
+static discord_bot_t *global_bot_instance = NULL;
+
+// Set global bot instance
+void discord_set_global_bot(discord_bot_t *bot) {
+    global_bot_instance = bot;
+}
+
+// Get current latency in milliseconds
+long discord_get_latency(discord_bot_t *bot) {
+    if (!bot) return -1;
+    
+    pthread_mutex_lock(&bot->latency_mutex);
+    long latency = bot->gateway_latency_ms;
+    pthread_mutex_unlock(&bot->latency_mutex);
+    
+    return latency;
+}
+
+// Calculate time difference in milliseconds
+static long timeval_diff_ms(struct timeval *start, struct timeval *end) {
+    return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
+}
+
+// Send heartbeat
+static void send_heartbeat(discord_bot_t *bot, struct lws *wsi) {
+    json_t *heartbeat = json_object();
+    json_object_set_new(heartbeat, "op", json_integer(1));
+    json_object_set_new(heartbeat, "d", json_null());
+    
+    char *heartbeat_str = json_dumps(heartbeat, 0);
+    if (heartbeat_str) {
+        size_t msg_len = strlen(heartbeat_str);
+        unsigned char *buf = malloc(LWS_PRE + msg_len);
+        if (buf) {
+            memcpy(&buf[LWS_PRE], heartbeat_str, msg_len);
+            lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+            
+            // Record heartbeat sent time
+            pthread_mutex_lock(&bot->latency_mutex);
+            gettimeofday(&bot->last_heartbeat_sent, NULL);
+            bot->heartbeat_acked = 0;
+            pthread_mutex_unlock(&bot->latency_mutex);
+            
+            free(buf);
+        }
+        free(heartbeat_str);
+    }
+    
+    json_decref(heartbeat);
+}
 
 // Response buffer for HTTP requests
 static size_t write_response_callback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -23,9 +75,10 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     return realsize;
 }
 
-// Fixed WebSocket callback with better memory management
+// Enhanced WebSocket callback with heartbeat and latency tracking
 static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     discord_bot_t *bot = (discord_bot_t *)lws_context_user(lws_get_context(wsi));
+    static time_t last_heartbeat_time = 0;
     
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
@@ -62,8 +115,18 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
                 break;
             }
             
+            int opcode = json_integer_value(op);
+            
             // Handle HELLO message (opcode 10)
-            if (json_integer_value(op) == 10) {
+            if (opcode == 10) {
+                // Extract heartbeat interval
+                if (d) {
+                    json_t *heartbeat_interval_obj = json_object_get(d, "heartbeat_interval");
+                    if (heartbeat_interval_obj) {
+                        bot->heartbeat_interval = json_integer_value(heartbeat_interval_obj);
+                    }
+                }
+                
                 // Send IDENTIFY
                 json_t *identify = json_object();
                 json_object_set_new(identify, "op", json_integer(2));
@@ -82,7 +145,6 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
                 
                 char *identify_str = json_dumps(identify, 0);
                 if (identify_str) {
-                    // Allocate buffer for WebSocket frame
                     size_t msg_len = strlen(identify_str);
                     unsigned char *buf = malloc(LWS_PRE + msg_len);
                     if (buf) {
@@ -94,6 +156,14 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
                 }
                 
                 json_decref(identify);
+            }
+            // Handle HEARTBEAT_ACK (opcode 11)
+            else if (opcode == 11) {
+                pthread_mutex_lock(&bot->latency_mutex);
+                gettimeofday(&bot->last_heartbeat_ack, NULL);
+                bot->heartbeat_acked = 1;
+                bot->gateway_latency_ms = timeval_diff_ms(&bot->last_heartbeat_sent, &bot->last_heartbeat_ack);
+                pthread_mutex_unlock(&bot->latency_mutex);
             }
             // Handle INTERACTION_CREATE (slash commands)
             else if (t && strcmp(json_string_value(t), "INTERACTION_CREATE") == 0) {
@@ -133,6 +203,17 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
             break;
         }
         
+        case LWS_CALLBACK_CLIENT_WRITEABLE: {
+            // Send heartbeat if needed
+            time_t current_time = time(NULL);
+            if (bot->heartbeat_interval > 0 && 
+                (current_time - last_heartbeat_time) >= (bot->heartbeat_interval / 1000)) {
+                send_heartbeat(bot, wsi);
+                last_heartbeat_time = current_time;
+            }
+            break;
+        }
+        
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
             printf("Connection error\n");
             break;
@@ -148,8 +229,7 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
     return 0;
 }
 
-
-// Fixed gateway thread function with proper URL parsing
+// Gateway thread function with heartbeat timer
 static void* gateway_thread_func(void *arg) {
     discord_bot_t *bot = (discord_bot_t *)arg;
     
@@ -248,7 +328,8 @@ static void* gateway_thread_func(void *arg) {
     }
     
     while (!bot->should_stop) {
-        lws_service(bot->ws_context, 1000);
+        lws_service(bot->ws_context, 100);
+        lws_callback_on_writable(bot->ws_connection);
     }
     
     lws_context_destroy(bot->ws_context);
@@ -304,6 +385,13 @@ discord_bot_t* discord_init(const char *token) {
     bot->token = strdup(token);
     bot->curl = curl_easy_init();
     bot->gateway_url = strdup("wss://gateway.discord.gg/?v=10&encoding=json");
+    bot->gateway_latency_ms = -1; // Initialize to -1 (unknown)
+    
+    // Initialize mutex
+    if (pthread_mutex_init(&bot->latency_mutex, NULL) != 0) {
+        discord_cleanup(bot);
+        return NULL;
+    }
     
     if (!bot->token || !bot->curl || !bot->gateway_url) {
         discord_cleanup(bot);
@@ -317,8 +405,6 @@ discord_bot_t* discord_init(const char *token) {
     
     return bot;
 }
-
-// Add this function to discord.c - it gets the correct Gateway URL from Discord
 
 // Get Gateway URL from Discord API
 int discord_get_gateway_url(discord_bot_t *bot) {
@@ -386,6 +472,9 @@ void discord_cleanup(discord_bot_t *bot) {
             free(bot->commands[i].description);
             // Note: handler is a function pointer, no need to free
         }
+        
+        // Destroy mutex
+        pthread_mutex_destroy(&bot->latency_mutex);
         
         if (bot->curl) {
             curl_easy_cleanup(bot->curl);
