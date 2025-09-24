@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <curl/curl.h>
 #include <jansson.h>
 #include <libwebsockets.h>
@@ -12,16 +13,36 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define MAX_COMMANDS 10
+#define MAX_COMMANDS 200
 #define MAX_RESPONSE_SIZE 4096
+#define MAX_EMBED_FIELDS 10
 
 // Function pointer type for command handlers
-typedef char* (*command_handler_t)(void);
 
+
+// Embed structure
+typedef struct {
+    char *title;
+    char *description;
+    char *footer;
+    unsigned int color; // Hex color code
+    time_t timestamp;
+} discord_embed_t;
+
+// Message structure
+typedef struct {
+    char *content;
+    bool ephemeral;
+    discord_embed_t *embed; // Can be NULL if no embed
+} discord_message_t;
+
+typedef discord_message_t* (*command_handler_t)(void);
+
+// Slash command structure
 typedef struct {
     char *name;
     char *description;
-    command_handler_t handler; // Function pointer instead of static message
+    command_handler_t handler;
 } slash_command_t;
 
 typedef struct {
@@ -60,14 +81,23 @@ discord_bot_t* discord_init(const char *token);
 // Clean up resources
 void discord_cleanup(discord_bot_t *bot);
 
-// Send a message to a channel
-void discord_send_message(discord_bot_t *bot, const char *channel_id, const char *message);
+// Unified message sending function
+void discord_send_message(discord_bot_t *bot, const char *channel_id, discord_message_t *message);
 
-// Add a slash command with function pointer
-int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler);
+// Create and destroy message structures
+discord_message_t* discord_create_message(const char *content, bool ephemeral);
+void discord_destroy_message(discord_message_t *message);
 
-// Register all slash commands with Discord
-int discord_register_commands(discord_bot_t *bot);
+// Embed management functions
+discord_embed_t* discord_create_embed(const char *title, const char *description, unsigned int color);
+void discord_destroy_embed(discord_embed_t *embed);
+void discord_set_embed_footer(discord_embed_t *embed, const char *footer);
+void discord_set_embed_timestamp(discord_embed_t *embed, time_t timestamp);
+void discord_message_set_embed(discord_message_t *message, discord_embed_t *embed);
+
+// Command management (separated from handling)
+int discord_register_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler);
+int discord_register_all_commands(discord_bot_t *bot);
 
 // Start the bot (connects to gateway and listens for commands)
 int discord_start_bot(discord_bot_t *bot);
@@ -78,8 +108,8 @@ int discord_get_gateway_url(discord_bot_t *bot);
 // Stop the bot
 void discord_stop_bot(discord_bot_t *bot);
 
-// Send interaction response
-void discord_send_interaction_response(discord_bot_t *bot, const char *interaction_id, const char *interaction_token, const char *message);
+// Send interaction response (using new message structure)
+void discord_send_interaction_response(discord_bot_t *bot, const char *interaction_id, const char *interaction_token, discord_message_t *message);
 
 // Get application ID from token (helper function)
 int discord_get_application_id(discord_bot_t *bot);

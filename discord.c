@@ -9,6 +9,89 @@ void discord_set_global_bot(discord_bot_t *bot) {
     global_bot_instance = bot;
 }
 
+// Create a new message
+discord_message_t* discord_create_message(const char *content, bool ephemeral) {
+    discord_message_t *msg = malloc(sizeof(discord_message_t));
+    if (!msg) return NULL;
+    
+    memset(msg, 0, sizeof(discord_message_t));
+    msg->ephemeral = ephemeral;
+    
+    if (content) {
+        msg->content = strdup(content);
+    }
+    
+    return msg;
+}
+
+// Destroy a message and its embed
+void discord_destroy_message(discord_message_t *message) {
+    if (!message) return;
+    
+    free(message->content);
+    if (message->embed) {
+        discord_destroy_embed(message->embed);
+    }
+    free(message);
+}
+
+// Create a new embed
+discord_embed_t* discord_create_embed(const char *title, const char *description, unsigned int color) {
+    discord_embed_t *embed = malloc(sizeof(discord_embed_t));
+    if (!embed) return NULL;
+    
+    memset(embed, 0, sizeof(discord_embed_t));
+    embed->color = color;
+    
+    if (title) {
+        embed->title = strdup(title);
+    }
+    if (description) {
+        embed->description = strdup(description);
+    }
+    
+    return embed;
+}
+
+// Destroy an embed
+void discord_destroy_embed(discord_embed_t *embed) {
+    if (!embed) return;
+    
+    free(embed->title);
+    free(embed->description);
+    free(embed->footer);
+    free(embed);
+}
+
+// Set embed footer
+void discord_set_embed_footer(discord_embed_t *embed, const char *footer) {
+    if (!embed) return;
+    
+    free(embed->footer);
+    if (footer) {
+        embed->footer = strdup(footer);
+    } else {
+        embed->footer = NULL;
+    }
+}
+
+// Set embed timestamp
+void discord_set_embed_timestamp(discord_embed_t *embed, time_t timestamp) {
+    if (!embed) return;
+    
+    embed->timestamp = timestamp;
+}
+
+// Attach embed to message
+void discord_message_set_embed(discord_message_t *message, discord_embed_t *embed) {
+    if (!message) return;
+    
+    if (message->embed) {
+        discord_destroy_embed(message->embed);
+    }
+    message->embed = embed;
+}
+
 // Get current latency in milliseconds
 long discord_get_latency(discord_bot_t *bot) {
     if (!bot) return -1;
@@ -73,6 +156,52 @@ static size_t write_response_callback(void *contents, size_t size, size_t nmemb,
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     return realsize;
+}
+
+// Build JSON payload from message structure
+static char* build_message_payload(discord_message_t *message) {
+    if (!message) return NULL;
+    
+    json_t *payload = json_object();
+    
+    // Add content if present
+    if (message->content && strlen(message->content) > 0) {
+        json_object_set_new(payload, "content", json_string(message->content));
+    }
+    
+    // Add embed if present
+    if (message->embed) {
+        json_t *embed_obj = json_object();
+        
+        if (message->embed->title) {
+            json_object_set_new(embed_obj, "title", json_string(message->embed->title));
+        }
+        if (message->embed->description) {
+            json_object_set_new(embed_obj, "description", json_string(message->embed->description));
+        }
+        if (message->embed->footer) {
+            json_t *footer_obj = json_object();
+            json_object_set_new(footer_obj, "text", json_string(message->embed->footer));
+            json_object_set_new(embed_obj, "footer", footer_obj);
+        }
+        if (message->embed->color != 0) {
+            json_object_set_new(embed_obj, "color", json_integer(message->embed->color));
+        }
+        if (message->embed->timestamp != 0) {
+            char timestamp[64];
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000Z", gmtime(&message->embed->timestamp));
+            json_object_set_new(embed_obj, "timestamp", json_string(timestamp));
+        }
+        
+        json_t *embeds_array = json_array();
+        json_array_append_new(embeds_array, embed_obj);
+        json_object_set_new(payload, "embeds", embeds_array);
+    }
+    
+    char *payload_str = json_dumps(payload, 0);
+    json_decref(payload);
+    
+    return payload_str;
 }
 
 // Enhanced WebSocket callback with heartbeat and latency tracking
@@ -167,36 +296,39 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *
             }
             // Handle INTERACTION_CREATE (slash commands)
             else if (t && strcmp(json_string_value(t), "INTERACTION_CREATE") == 0) {
-                if (d) {
-                    json_t *interaction_type = json_object_get(d, "type");
-                    
-                    // Type 2 = Application Command
-                    if (interaction_type && json_integer_value(interaction_type) == 2) {
-                        json_t *data_obj = json_object_get(d, "data");
-                        json_t *command_name = json_object_get(data_obj, "name");
-                        json_t *interaction_id = json_object_get(d, "id");
-                        json_t *interaction_token = json_object_get(d, "token");
+              if (d) {
+                json_t *interaction_type = json_object_get(d, "type");
+        
+                // Type 2 = Application Command
+                if (interaction_type && json_integer_value(interaction_type) == 2) {
+                  json_t *data_obj = json_object_get(d, "data");
+                  json_t *command_name = json_object_get(data_obj, "name");
+                  json_t *interaction_id = json_object_get(d, "id");
+                  json_t *interaction_token = json_object_get(d, "token");
+            
+                  if (command_name && interaction_id && interaction_token) {
+                    // Find matching command
+                    const char *cmd_name = json_string_value(command_name);
+                    for (int i = 0; i < bot->command_count; i++) {
+                      if (strcmp(bot->commands[i].name, cmd_name) == 0) {
+                        // Call the handler function which now returns discord_message_t*
+                        discord_message_t *response_msg = bot->commands[i].handler();
                         
-                        if (command_name && interaction_id && interaction_token) {
-                            // Find matching command
-                            const char *cmd_name = json_string_value(command_name);
-                            for (int i = 0; i < bot->command_count; i++) {
-                                if (strcmp(bot->commands[i].name, cmd_name) == 0) {
-                                    // Call the handler function NOW when command is used
-                                    char *response = bot->commands[i].handler();
-                                    discord_send_interaction_response(bot, 
-                                        json_string_value(interaction_id),
-                                        json_string_value(interaction_token),
-                                        response);
-                                    // Free the response if handler allocated it
-                                    free(response);
-                                    break;
-                                }
-                            }
+                        if (response_msg) {
+                            discord_send_interaction_response(bot, 
+                                json_string_value(interaction_id),
+                                json_string_value(interaction_token),
+                                response_msg);
+                            
+                            discord_destroy_message(response_msg);
                         }
+                        break;
                     }
                 }
             }
+        }
+    }
+}
             
             json_decref(root);
             free(msg);
@@ -483,18 +615,14 @@ void discord_cleanup(discord_bot_t *bot) {
     }
 }
 
-// Send a message to a channel
-void discord_send_message(discord_bot_t *bot, const char *channel_id, const char *message) {
+// Unified message sending function
+void discord_send_message(discord_bot_t *bot, const char *channel_id, discord_message_t *message) {
     if (!bot || !channel_id || !message) return;
     
     char url[256];
     snprintf(url, sizeof(url), "https://discord.com/api/v10/channels/%s/messages", channel_id);
 
-    json_t *payload = json_object();
-    json_object_set_new(payload, "content", json_string(message));
-    char *payload_str = json_dumps(payload, 0);
-    json_decref(payload);
-
+    char *payload_str = build_message_payload(message);
     if (!payload_str) return;
 
     struct curl_slist *headers = NULL;
@@ -519,22 +647,22 @@ void discord_send_message(discord_bot_t *bot, const char *channel_id, const char
     curl_easy_reset(bot->curl);
 }
 
-// Add a slash command with function pointer
-int discord_add_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler) {
+// Register a slash command (separated from handling)
+int discord_register_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler) {
     if (!bot || !name || !description || !handler || bot->command_count >= MAX_COMMANDS) {
         return 0;
     }
     
     bot->commands[bot->command_count].name = strdup(name);
     bot->commands[bot->command_count].description = strdup(description);
-    bot->commands[bot->command_count].handler = handler; // Store function pointer
+    bot->commands[bot->command_count].handler = handler;
     bot->command_count++;
     
     return 1;
 }
 
-// Register all slash commands with Discord
-int discord_register_commands(discord_bot_t *bot) {
+// Register all commands with Discord API
+int discord_register_all_commands(discord_bot_t *bot) {
     if (!bot || !bot->application_id) return 0;
     
     for (int i = 0; i < bot->command_count; i++) {
@@ -578,15 +706,53 @@ int discord_register_commands(discord_bot_t *bot) {
     return 1;
 }
 
-// Send interaction response
-void discord_send_interaction_response(discord_bot_t *bot, const char *interaction_id, const char *interaction_token, const char *message) {
+// Send interaction response using new message structure
+void discord_send_interaction_response(discord_bot_t *bot, const char *interaction_id, const char *interaction_token, discord_message_t *message) {
     if (!bot || !interaction_id || !interaction_token || !message) return;
     
     char url[512];
     snprintf(url, sizeof(url), "https://discord.com/api/v10/interactions/%s/%s/callback", interaction_id, interaction_token);
     
     json_t *data = json_object();
-    json_object_set_new(data, "content", json_string(message));
+    
+    // Add content if present
+    if (message->content && strlen(message->content) > 0) {
+        json_object_set_new(data, "content", json_string(message->content));
+    }
+    
+    // Add embed if present
+    if (message->embed) {
+        json_t *embed_obj = json_object();
+        
+        if (message->embed->title) {
+            json_object_set_new(embed_obj, "title", json_string(message->embed->title));
+        }
+        if (message->embed->description) {
+            json_object_set_new(embed_obj, "description", json_string(message->embed->description));
+        }
+        if (message->embed->footer) {
+            json_t *footer_obj = json_object();
+            json_object_set_new(footer_obj, "text", json_string(message->embed->footer));
+            json_object_set_new(embed_obj, "footer", footer_obj);
+        }
+        if (message->embed->color != 0) {
+            json_object_set_new(embed_obj, "color", json_integer(message->embed->color));
+        }
+        if (message->embed->timestamp != 0) {
+            char timestamp[64];
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000Z", gmtime(&message->embed->timestamp));
+            json_object_set_new(embed_obj, "timestamp", json_string(timestamp));
+        }
+        
+        json_t *embeds_array = json_array();
+        json_array_append_new(embeds_array, embed_obj);
+        json_object_set_new(data, "embeds", embeds_array);
+    }
+    
+    // Add flags for ephemeral messages
+    if (message->ephemeral) {
+        json_object_set_new(data, "flags", json_integer(64)); // EPHEMERAL flag
+    }
     
     json_t *response = json_object();
     json_object_set_new(response, "type", json_integer(4)); // CHANNEL_MESSAGE_WITH_SOURCE
