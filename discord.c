@@ -1,5 +1,6 @@
 // discord.c - Implementation
 #include "discord.h"
+#include <string.h>
 
 // Global bot instance for built-in commands
 static discord_bot_t *global_bot_instance = NULL;
@@ -60,6 +61,8 @@ void discord_destroy_embed(discord_embed_t *embed) {
     free(embed->title);
     free(embed->description);
     free(embed->footer);
+    free(embed->footer_url);
+    free(embed->thumbnail);
     free(embed);
 }
 
@@ -73,6 +76,28 @@ void discord_set_embed_footer(discord_embed_t *embed, const char *footer) {
     } else {
         embed->footer = NULL;
     }
+}
+
+void discord_set_embed_footer_url(discord_embed_t *embed, const char *footer_url) {
+  if (!embed) return;
+
+  free(embed->footer_url);
+  if (footer_url) {
+    embed->footer_url = strdup(footer_url);
+  } else {
+    embed->footer_url = NULL;
+  }
+}
+
+void discord_set_embed_thumbnail(discord_embed_t *embed, const char *thumbnail) {
+  if (!embed) return;
+  
+  free(embed->thumbnail);
+  if (thumbnail) {
+    embed->thumbnail = strdup(thumbnail);
+  } else {
+    embed->thumbnail = NULL;
+  }
 }
 
 // Set embed timestamp
@@ -158,7 +183,6 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     return realsize;
 }
 
-// Build JSON payload from message structure
 static char* build_message_payload(discord_message_t *message) {
     if (!message) return NULL;
     
@@ -179,14 +203,33 @@ static char* build_message_payload(discord_message_t *message) {
         if (message->embed->description) {
             json_object_set_new(embed_obj, "description", json_string(message->embed->description));
         }
+        
+        // Handle footer (with optional icon)
         if (message->embed->footer) {
             json_t *footer_obj = json_object();
             json_object_set_new(footer_obj, "text", json_string(message->embed->footer));
+            
+            // Add footer icon if provided
+            if (message->embed->footer_url) {
+                json_object_set_new(footer_obj, "icon_url", json_string(message->embed->footer_url));
+            }
+            
             json_object_set_new(embed_obj, "footer", footer_obj);
         }
+        
+        // Add color (only if non-zero)
         if (message->embed->color != 0) {
             json_object_set_new(embed_obj, "color", json_integer(message->embed->color));
         }
+
+        // Handle thumbnail
+        if (message->embed->thumbnail) {
+            json_t *thumbnail_obj = json_object();
+            json_object_set_new(thumbnail_obj, "url", json_string(message->embed->thumbnail));
+            json_object_set_new(embed_obj, "thumbnail", thumbnail_obj);
+        }
+        
+        // Add timestamp
         if (message->embed->timestamp != 0) {
             char timestamp[64];
             strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000Z", gmtime(&message->embed->timestamp));
@@ -198,7 +241,7 @@ static char* build_message_payload(discord_message_t *message) {
         json_object_set_new(payload, "embeds", embeds_array);
     }
     
-    char *payload_str = json_dumps(payload, 0);
+    char *payload_str = json_dumps(payload, JSON_COMPACT);
     json_decref(payload);
     
     return payload_str;
@@ -706,60 +749,38 @@ int discord_register_all_commands(discord_bot_t *bot) {
     return 1;
 }
 
-// Send interaction response using new message structure
+// Send interaction response using build_message_payload function
 void discord_send_interaction_response(discord_bot_t *bot, const char *interaction_id, const char *interaction_token, discord_message_t *message) {
     if (!bot || !interaction_id || !interaction_token || !message) return;
     
     char url[512];
     snprintf(url, sizeof(url), "https://discord.com/api/v10/interactions/%s/%s/callback", interaction_id, interaction_token);
     
-    json_t *data = json_object();
+    // Use your existing build_message_payload function!
+    char *message_payload = build_message_payload(message);
+    if (!message_payload) return;
     
-    // Add content if present
-    if (message->content && strlen(message->content) > 0) {
-        json_object_set_new(data, "content", json_string(message->content));
+    // Parse it to get the data object
+    json_error_t error;
+    json_t *message_data = json_loads(message_payload, 0, &error);
+    if (!message_data) {
+        free(message_payload);
+        return;
     }
     
-    // Add embed if present
-    if (message->embed) {
-        json_t *embed_obj = json_object();
-        
-        if (message->embed->title) {
-            json_object_set_new(embed_obj, "title", json_string(message->embed->title));
-        }
-        if (message->embed->description) {
-            json_object_set_new(embed_obj, "description", json_string(message->embed->description));
-        }
-        if (message->embed->footer) {
-            json_t *footer_obj = json_object();
-            json_object_set_new(footer_obj, "text", json_string(message->embed->footer));
-            json_object_set_new(embed_obj, "footer", footer_obj);
-        }
-        if (message->embed->color != 0) {
-            json_object_set_new(embed_obj, "color", json_integer(message->embed->color));
-        }
-        if (message->embed->timestamp != 0) {
-            char timestamp[64];
-            strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000Z", gmtime(&message->embed->timestamp));
-            json_object_set_new(embed_obj, "timestamp", json_string(timestamp));
-        }
-        
-        json_t *embeds_array = json_array();
-        json_array_append_new(embeds_array, embed_obj);
-        json_object_set_new(data, "embeds", embeds_array);
-    }
-    
-    // Add flags for ephemeral messages
-    if (message->ephemeral) {
-        json_object_set_new(data, "flags", json_integer(64)); // EPHEMERAL flag
-    }
-    
+    // Create the interaction response wrapper
     json_t *response = json_object();
     json_object_set_new(response, "type", json_integer(4)); // CHANNEL_MESSAGE_WITH_SOURCE
-    json_object_set_new(response, "data", data);
+    json_object_set_new(response, "data", message_data); // Use the complete message data!
+    
+    // Add ephemeral flag if needed (this goes in the data object)
+    if (message->ephemeral) {
+        json_object_set_new(message_data, "flags", json_integer(64)); // EPHEMERAL flag
+    }
     
     char *response_str = json_dumps(response, 0);
     json_decref(response);
+    free(message_payload);
     
     if (!response_str) return;
     

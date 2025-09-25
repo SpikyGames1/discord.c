@@ -2,7 +2,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-const char *bot_token = "YOUR_TOKEN_HERE";
+const char *bot_token = "YOUR_BOT_TOKEN_HERE";
 
 
 // Global bot instance for signal handling
@@ -61,27 +61,33 @@ discord_message_t* info_command(void) {
     return discord_create_message(response, false);
 }
 
+
+
 discord_message_t* embed_demo_command(void) {
-    // Create both content and embed in a single message
     discord_message_t *message = discord_create_message("", false);
     
-    // Create and attach the embed
     discord_embed_t *embed = discord_create_embed(
-        "Embed Demo", 
-        "This is an example of a rich embed message sent along with regular text!", 
-        0x00ff00  // Green color
+        "Embed Demo",  // title
+        "This is an example of a rich embed message sent along with regular text! (and also footer url and thumbnail)", // description
+        0x00ff00   // Color (Green) 
     );
     
-    // Set footer and timestamp
     discord_set_embed_footer(embed, "Powered by Discord C Library");
+    
     discord_set_embed_timestamp(embed, time(NULL));
     
-    discord_message_set_embed(message, embed);
+    discord_set_embed_thumbnail(embed, "https://placehold.co/400x400");
+
+    discord_set_embed_footer_url(embed, "https://placehold.co/400x400");
     
+    discord_message_set_embed(message, embed);
+
     return message;
 }
 
-int main() {  
+int main() { 
+    
+    
     // Initialize curl globally
     curl_global_init(CURL_GLOBAL_DEFAULT);
     

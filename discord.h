@@ -24,7 +24,9 @@
 typedef struct {
     char *title;
     char *description;
+    char *thumbnail;
     char *footer;
+    char *footer_url;
     unsigned int color; // Hex color code
     time_t timestamp;
 } discord_embed_t;
@@ -93,12 +95,12 @@ discord_embed_t* discord_create_embed(const char *title, const char *description
 void discord_destroy_embed(discord_embed_t *embed);
 void discord_set_embed_footer(discord_embed_t *embed, const char *footer);
 void discord_set_embed_timestamp(discord_embed_t *embed, time_t timestamp);
+void discord_set_embed_footer_url(discord_embed_t *embed, const char *footer_url);
+void discord_set_embed_thumbnail(discord_embed_t *embed, const char *thumbnail);
 void discord_message_set_embed(discord_message_t *message, discord_embed_t *embed);
-
 // Command management (separated from handling)
 int discord_register_slash_command(discord_bot_t *bot, const char *name, const char *description, command_handler_t handler);
 int discord_register_all_commands(discord_bot_t *bot);
-
 // Start the bot (connects to gateway and listens for commands)
 int discord_start_bot(discord_bot_t *bot);
 
