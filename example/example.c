@@ -76,9 +76,9 @@ discord_message_t* embed_demo_command(void) {
     
     discord_set_embed_timestamp(embed, time(NULL));
     
-    discord_set_embed_thumbnail(embed, "https://placehold.co/400x400");
+    discord_set_embed_thumbnail(embed, "https://picsum.photos/200");
 
-    discord_set_embed_footer_url(embed, "https://placehold.co/400x400");
+    discord_set_embed_footer_url(embed, "https://picsum.photos/200");
     
     discord_message_set_embed(message, embed);
 
